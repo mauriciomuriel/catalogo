@@ -1,0 +1,163 @@
+Prompt para generar data dummy:
+Estoy haciendo un entreamiento para hacer ETL y convertir una base de datos transaccional a una olap modelo kimball. En el adjunto encontraras la version de SQL que tengo en un recurso de azure.
+Podrias ayudarme a crear un script de de SQL con unas 50 transacciones ficticias de ventas con al menos 10 transacciones y al menos 7 columas relacionadas con la transaccion. 
+La idea es que tenga una tabla de ordenes, otra de detalle de ordenes y las demas tablas de tipo maestra que habitualmente se pueden tener en un modelo oltp de ventas para conectar el MER. 
+Todo debe quedar en un unico script de sql.
+
+
+
+-- =========================================
+-- LIMPIEZA
+-- =========================================
+IF OBJECT_ID('OrderDetails') IS NOT NULL DROP TABLE OrderDetails;
+IF OBJECT_ID('Orders') IS NOT NULL DROP TABLE Orders;
+IF OBJECT_ID('Customers') IS NOT NULL DROP TABLE Customers;
+IF OBJECT_ID('Products') IS NOT NULL DROP TABLE Products;
+IF OBJECT_ID('SalesPersons') IS NOT NULL DROP TABLE SalesPersons;
+IF OBJECT_ID('Stores') IS NOT NULL DROP TABLE Stores;
+
+-- =========================================
+-- TABLAS MAESTRAS
+-- =========================================
+
+CREATE TABLE Customers (
+    CustomerID INT PRIMARY KEY,
+    CustomerName VARCHAR(100),
+    City VARCHAR(50),
+    Country VARCHAR(50),
+    Email VARCHAR(100)
+);
+
+CREATE TABLE Products (
+    ProductID INT PRIMARY KEY,
+    ProductName VARCHAR(100),
+    Category VARCHAR(50),
+    UnitPrice DECIMAL(10,2),
+    Active BIT
+);
+
+CREATE TABLE SalesPersons (
+    SalesPersonID INT PRIMARY KEY,
+    SalesPersonName VARCHAR(100),
+    Region VARCHAR(50)
+);
+
+CREATE TABLE Stores (
+    StoreID INT PRIMARY KEY,
+    StoreName VARCHAR(100),
+    City VARCHAR(50)
+);
+
+-- =========================================
+-- TABLAS TRANSACCIONALES
+-- =========================================
+
+CREATE TABLE Orders (
+    OrderID INT PRIMARY KEY,
+    OrderDate DATE,
+    CustomerID INT,
+    SalesPersonID INT,
+    StoreID INT,
+    TotalAmount DECIMAL(12,2),
+    Status VARCHAR(20),
+    PaymentMethod VARCHAR(20),
+
+    FOREIGN KEY (CustomerID) REFERENCES Customers(CustomerID),
+    FOREIGN KEY (SalesPersonID) REFERENCES SalesPersons(SalesPersonID),
+    FOREIGN KEY (StoreID) REFERENCES Stores(StoreID)
+);
+
+CREATE TABLE OrderDetails (
+    OrderDetailID INT PRIMARY KEY,
+    OrderID INT,
+    ProductID INT,
+    Quantity INT,
+    UnitPrice DECIMAL(10,2),
+    Discount DECIMAL(5,2),
+    LineTotal DECIMAL(12,2),
+
+    FOREIGN KEY (OrderID) REFERENCES Orders(OrderID),
+    FOREIGN KEY (ProductID) REFERENCES Products(ProductID)
+);
+
+-- =========================================
+-- INSERTS MAESTROS
+-- =========================================
+
+INSERT INTO Customers VALUES
+(1,'Carlos Lopez','Bogota','Colombia','carlos@mail.com'),
+(2,'Ana Torres','Medellin','Colombia','ana@mail.com'),
+(3,'Luis Perez','Cali','Colombia','luis@mail.com'),
+(4,'Maria Gomez','Bogota','Colombia','maria@mail.com'),
+(5,'Pedro Ruiz','Barranquilla','Colombia','pedro@mail.com');
+
+INSERT INTO Products VALUES
+(1,'Laptop','Tecnologia',2500,1),
+(2,'Mouse','Accesorios',25,1),
+(3,'Teclado','Accesorios',45,1),
+(4,'Monitor','Tecnologia',800,1),
+(5,'Impresora','Tecnologia',600,1);
+
+INSERT INTO SalesPersons VALUES
+(1,'Juan Ramirez','Centro'),
+(2,'Laura Diaz','Norte'),
+(3,'Andres Cruz','Sur');
+
+INSERT INTO Stores VALUES
+(1,'Tienda Centro','Bogota'),
+(2,'Tienda Norte','Bogota'),
+(3,'Tienda Medellin','Medellin');
+
+-- =========================================
+-- INSERTS TRANSACCIONES (50 ORDERS)
+-- =========================================
+
+DECLARE @i INT = 1;
+
+WHILE @i <= 50
+BEGIN
+    INSERT INTO Orders VALUES (
+        @i,
+        DATEADD(DAY, -@i, GETDATE()),
+        ((@i-1)%5)+1,
+        ((@i-1)%3)+1,
+        ((@i-1)%3)+1,
+        0,
+        'COMPLETED',
+        CASE WHEN @i%2=0 THEN 'CARD' ELSE 'CASH' END
+    );
+
+    DECLARE @detailCount INT = 1;
+
+    WHILE @detailCount <= 2  -- 2 líneas por orden
+    BEGIN
+        DECLARE @ProductID INT = ((@detailCount + @i) % 5) + 1;
+        DECLARE @Qty INT = ((@i + @detailCount) % 4) + 1;
+        DECLARE @Price DECIMAL(10,2) = (SELECT UnitPrice FROM Products WHERE ProductID = @ProductID);
+        DECLARE @Discount DECIMAL(5,2) = CASE WHEN @i%3=0 THEN 0.1 ELSE 0 END;
+        DECLARE @LineTotal DECIMAL(12,2) = (@Qty * @Price) * (1 - @Discount);
+
+        INSERT INTO OrderDetails VALUES (
+            (@i*10 + @detailCount),
+            @i,
+            @ProductID,
+            @Qty,
+            @Price,
+            @Discount,
+            @LineTotal
+        );
+
+        SET @detailCount = @detailCount + 1;
+    END
+
+    -- Actualizar total de orden
+    UPDATE Orders
+    SET TotalAmount = (
+        SELECT SUM(LineTotal)
+        FROM OrderDetails
+        WHERE OrderID = @i
+    )
+    WHERE OrderID = @i;
+
+    SET @i = @i + 1;
+END;
